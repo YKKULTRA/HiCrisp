@@ -4,13 +4,13 @@ import HiCrispSupport
 struct MenuBarView: View {
     @ObservedObject var displayManager: DisplayManager
     @ObservedObject var virtualDisplayManager: VirtualDisplayManager
+    @AppStorage("experimentalMatchPhysicalColorProfile") private var experimentalMatchPhysicalColorProfile = false
     @State private var statusMessage: String?
     @State private var statusIsError = false
     @State private var selectedHzByDisplay: [CGDirectDisplayID: Double] = [:]
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
             HStack {
                 Text("HiCrisp")
                     .font(.headline)
@@ -25,61 +25,79 @@ struct MenuBarView: View {
 
             Divider()
 
-            let externals = displayManager.displays.filter { !$0.isBuiltIn }
+            ScrollView {
+                VStack(spacing: 0) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle("Match monitor color profile", isOn: $experimentalMatchPhysicalColorProfile)
+                            .toggleStyle(.switch)
 
-            if externals.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "display.trianglebadge.exclamationmark")
-                        .font(.largeTitle)
-                        .foregroundColor(.secondary)
-                    Text("No external displays found")
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(24)
-            } else {
-                VStack(spacing: 12) {
-                    ForEach(externals) { display in
-                        monitorCard(display)
-                    }
-                }
-                .padding(12)
-            }
-
-            // Built-in display (compact)
-            if let builtIn = displayManager.displays.first(where: { $0.isBuiltIn }) {
-                Divider()
-                HStack(spacing: 6) {
-                    Image(systemName: "laptopcomputer")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text("\(builtIn.name) - \(builtIn.currentMode?.label ?? "Unknown")")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 6)
-            }
-
-            // Status
-            if let msg = statusMessage {
-                Divider()
-                HStack(spacing: 6) {
-                    Image(systemName: statusIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                        .foregroundColor(statusIsError ? .orange : .green)
-                    Text(msg)
-                        .font(.caption)
-                        .lineLimit(3)
-                    Spacer()
-                    Button(action: { statusMessage = nil }) {
-                        Image(systemName: "xmark.circle.fill")
+                        Text("Experimental. Off uses stable sRGB for the virtual display.")
+                            .font(.caption2)
                             .foregroundColor(.secondary)
                     }
-                    .buttonStyle(.borderless)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+
+                    Divider()
+
+                    let externals = displayManager.displays.filter { !$0.isBuiltIn }
+
+                    if externals.isEmpty {
+                        VStack(spacing: 8) {
+                            Image(systemName: "display.trianglebadge.exclamationmark")
+                                .font(.largeTitle)
+                                .foregroundColor(.secondary)
+                            Text("No external displays found")
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(24)
+                    } else {
+                        VStack(spacing: 12) {
+                            ForEach(externals) { display in
+                                monitorCard(display)
+                            }
+                        }
+                        .padding(12)
+                    }
+
+                    if let builtIn = displayManager.displays.first(where: { $0.isBuiltIn }) {
+                        Divider()
+                        HStack(spacing: 6) {
+                            Image(systemName: "laptopcomputer")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("\(builtIn.name) - \(builtIn.currentMode?.label ?? "Unknown")")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                    }
+
+                    if let msg = statusMessage {
+                        Divider()
+                        HStack(spacing: 6) {
+                            Image(systemName: statusIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                                .foregroundColor(statusIsError ? .orange : .green)
+                            Text(msg)
+                                .font(.caption)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 8)
+                            Button(action: { statusMessage = nil }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.secondary)
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                    }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 6)
             }
+            .frame(maxHeight: 420)
 
             Divider()
             Button("Quit") { NSApplication.shared.terminate(nil) }
@@ -87,7 +105,7 @@ struct MenuBarView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
         }
-        .frame(width: 340)
+        .frame(width: 360)
     }
 
     // MARK: - Monitor Card
@@ -146,6 +164,12 @@ struct MenuBarView: View {
                         Text("Color profile: \(activeSession.profileDescription)")
                             .font(.caption2)
                             .foregroundColor(.secondary)
+
+                        if activeSession.usedFallbackProfile {
+                            Text("Requested physical profile matching was not available, so the session fell back to sRGB.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
 
                         if activeSession.usesEstimatedPhysicalSize {
                             Text("Physical size was estimated because the display did not report EDID dimensions.")
@@ -268,7 +292,8 @@ struct MenuBarView: View {
             physicalDisplay: display,
             targetWidth: display.nativeWidth,
             targetHeight: display.nativeHeight,
-            refreshRate: refreshRate
+            refreshRate: refreshRate,
+            preferPhysicalColorProfile: experimentalMatchPhysicalColorProfile
         ) { success, message in
             statusMessage = message
             statusIsError = !success

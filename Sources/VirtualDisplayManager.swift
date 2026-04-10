@@ -11,6 +11,11 @@ import HiCrispSupport
 /// display onto it. macOS renders at 2x and downscales to the panel (exact 2:1 box filter).
 /// No system files modified. Reverts when the app quits.
 final class VirtualDisplayManager: ObservableObject {
+    enum ProfileStrategy: Equatable {
+        case srgb
+        case matchPhysicalDisplay
+    }
+
     struct HiDPISession {
         let physicalDisplayID: CGDirectDisplayID
         let physicalDisplayName: String
@@ -20,6 +25,7 @@ final class VirtualDisplayManager: ObservableObject {
         let refreshRate: Double
         let profileDescription: String
         let usesEstimatedPhysicalSize: Bool
+        let usedFallbackProfile: Bool
     }
 
     @Published private(set) var activeSession: HiDPISession?
@@ -44,6 +50,7 @@ final class VirtualDisplayManager: ObservableObject {
         targetWidth: Int,
         targetHeight: Int,
         refreshRate: Double,
+        preferPhysicalColorProfile: Bool,
         completion: @escaping (Bool, String) -> Void
     ) {
         // Clean up existing virtual display (without touching generation)
@@ -58,7 +65,11 @@ final class VirtualDisplayManager: ObservableObject {
 
         let pixelWidth = UInt32(targetWidth * 2)
         let pixelHeight = UInt32(targetHeight * 2)
-        let profileAssignment = Self.bestProfileAssignment(for: physicalDisplay.id)
+        let profileStrategy: ProfileStrategy = preferPhysicalColorProfile ? .matchPhysicalDisplay : .srgb
+        let profileAssignment = Self.bestProfileAssignment(
+            for: physicalDisplay.id,
+            strategy: profileStrategy
+        )
 
         // --- Create virtual display descriptor ---
         let descriptor = CGVirtualDisplayDescriptor()
@@ -199,14 +210,16 @@ final class VirtualDisplayManager: ObservableObject {
                     targetHeight: targetHeight,
                     refreshRate: refreshRate,
                     profileDescription: profileAssignment.description,
-                    usesEstimatedPhysicalSize: usesEstimatedPhysicalSize
+                    usesEstimatedPhysicalSize: usesEstimatedPhysicalSize,
+                    usedFallbackProfile: profileAssignment.usedFallback
                 )
                 self.lastError = nil
 
                 let suffix = verified ? "" : " (warning: backingScaleFactor != 2.0)"
+                let profileSuffix = profileAssignment.usedFallback ? " using fallback sRGB profile" : ""
                 self.complete(
                     true,
-                    "HiDPI enabled on \(physicalDisplay.name) at \(targetWidth)x\(targetHeight) @ \(RefreshRateSupport.label(for: refreshRate))\(suffix)",
+                    "HiDPI enabled on \(physicalDisplay.name) at \(targetWidth)x\(targetHeight) @ \(RefreshRateSupport.label(for: refreshRate))\(profileSuffix)\(suffix)",
                     completion: completion
                 )
             }
@@ -254,6 +267,7 @@ final class VirtualDisplayManager: ObservableObject {
     private struct ProfileAssignment {
         let url: CFURL
         let description: String
+        let usedFallback: Bool
     }
 
     private func fail(_ message: String, completion: @escaping (Bool, String) -> Void) {
@@ -271,13 +285,49 @@ final class VirtualDisplayManager: ObservableObject {
         }
     }
 
-    private static func bestProfileAssignment(for physicalDisplayID: CGDirectDisplayID) -> ProfileAssignment {
-        // Matching the physical display's profile directly looked attractive,
-        // but it crashes on some systems during profile handoff. Use a safe
-        // system sRGB profile until that path can be reintroduced reliably.
+    private static func bestProfileAssignment(
+        for physicalDisplayID: CGDirectDisplayID,
+        strategy: ProfileStrategy
+    ) -> ProfileAssignment {
+        if strategy == .matchPhysicalDisplay,
+           let assignment = physicalProfileAssignment(for: physicalDisplayID) {
+            NSLog("[VirtualDisplay] Using physical display ICC profile: %@", assignment.description)
+            return assignment
+        }
+
+        if strategy == .matchPhysicalDisplay {
+            NSLog("[VirtualDisplay] Physical profile lookup failed, falling back to sRGB")
+        }
+
         let srgbProfilePath = "/System/Library/ColorSync/Profiles/sRGB Profile.icc"
         let profileURL = URL(fileURLWithPath: srgbProfilePath) as CFURL
-        return ProfileAssignment(url: profileURL, description: "sRGB IEC61966-2.1")
+        return ProfileAssignment(
+            url: profileURL,
+            description: "sRGB IEC61966-2.1",
+            usedFallback: strategy == .matchPhysicalDisplay
+        )
+    }
+
+    private static func physicalProfileAssignment(for physicalDisplayID: CGDirectDisplayID) -> ProfileAssignment? {
+        guard let unmanagedProfile = ColorSyncProfileCreateWithDisplayID(physicalDisplayID) else {
+            NSLog("[VirtualDisplay] No ColorSync profile found for display %u", physicalDisplayID)
+            return nil
+        }
+
+        let profile = unmanagedProfile.takeRetainedValue()
+        guard let unmanagedProfileURL = ColorSyncProfileGetURL(profile, nil) else {
+            NSLog("[VirtualDisplay] ColorSync profile has no URL for display %u", physicalDisplayID)
+            return nil
+        }
+
+        let profileURL = unmanagedProfileURL.takeUnretainedValue()
+        let description = ColorSyncProfileCopyDescriptionString(profile)?.takeRetainedValue() as String?
+
+        return ProfileAssignment(
+            url: profileURL,
+            description: description ?? "Matched physical display profile",
+            usedFallback: false
+        )
     }
 
     /// Assign the chosen ICC profile to the virtual display.
