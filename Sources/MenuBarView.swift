@@ -10,6 +10,8 @@ struct MenuBarView: View {
     @State private var selectedHzByDisplay: [CGDirectDisplayID: Double] = [:]
 
     var body: some View {
+        let externals = displayManager.displays.filter { !$0.isBuiltIn && $0.vendorID != VirtualDisplayManager.virtualVendorID }
+
         VStack(spacing: 0) {
             HStack {
                 Text("HiCrisp")
@@ -25,79 +27,73 @@ struct MenuBarView: View {
 
             Divider()
 
-            ScrollView {
-                VStack(spacing: 0) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Toggle("Match monitor color profile", isOn: $experimentalMatchPhysicalColorProfile)
-                            .toggleStyle(.switch)
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Match monitor color profile", isOn: $experimentalMatchPhysicalColorProfile)
+                    .toggleStyle(.switch)
 
-                        Text("Experimental. Off uses stable sRGB for the virtual display.")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
+                Text("Experimental. Off uses stable sRGB for the virtual display.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
 
-                    Divider()
+            Divider()
 
-                    let externals = displayManager.displays.filter { !$0.isBuiltIn }
-
-                    if externals.isEmpty {
-                        VStack(spacing: 8) {
-                            Image(systemName: "display.trianglebadge.exclamationmark")
-                                .font(.largeTitle)
-                                .foregroundColor(.secondary)
-                            Text("No external displays found")
-                                .foregroundColor(.secondary)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(24)
-                    } else {
-                        VStack(spacing: 12) {
-                            ForEach(externals) { display in
-                                monitorCard(display)
-                            }
-                        }
-                        .padding(12)
-                    }
-
-                    if let builtIn = displayManager.displays.first(where: { $0.isBuiltIn }) {
-                        Divider()
-                        HStack(spacing: 6) {
-                            Image(systemName: "laptopcomputer")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text("\(builtIn.name) - \(builtIn.currentMode?.label ?? "Unknown")")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
-                    }
-
-                    if let msg = statusMessage {
-                        Divider()
-                        HStack(spacing: 6) {
-                            Image(systemName: statusIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                                .foregroundColor(statusIsError ? .orange : .green)
-                            Text(msg)
-                                .font(.caption)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: 8)
-                            Button(action: { statusMessage = nil }) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundColor(.secondary)
-                            }
-                            .buttonStyle(.borderless)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
+            if externals.isEmpty {
+                VStack(spacing: 6) {
+                    Image(systemName: "display.trianglebadge.exclamationmark")
+                        .font(.title2)
+                        .foregroundColor(.secondary)
+                    Text("No external displays found")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(16)
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(externals) { display in
+                        monitorCard(display)
                     }
                 }
+                .padding(12)
             }
-            .frame(maxHeight: 420)
+
+            if let builtIn = displayManager.displays.first(where: { $0.isBuiltIn }) {
+                Divider()
+                HStack(spacing: 6) {
+                    Image(systemName: "laptopcomputer")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("\(builtIn.name) - \(builtIn.currentMode?.label ?? "Unknown")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+            }
+
+            if let msg = statusMessage {
+                Divider()
+                HStack(spacing: 6) {
+                    Image(systemName: statusIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        .foregroundColor(statusIsError ? .orange : .green)
+                    Text(msg)
+                        .font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Button(action: { statusMessage = nil }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+            }
 
             Divider()
             Button("Quit") { NSApplication.shared.terminate(nil) }
@@ -105,14 +101,14 @@ struct MenuBarView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
         }
-        .frame(width: 360)
+        .frame(width: 300)
     }
 
     // MARK: - Monitor Card
 
     @ViewBuilder
     private func monitorCard(_ display: DisplayInfo) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             // Header
             HStack {
                 Image(systemName: "display")
@@ -126,7 +122,7 @@ struct MenuBarView: View {
             // Current mode info
             HStack(spacing: 4) {
                 Text("\(display.nativeWidth)x\(display.nativeHeight)")
-                    .font(.system(size: 16, weight: .medium, design: .monospaced))
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
                 if let cur = display.currentMode {
                     Text("@ \(RefreshRateSupport.label(for: cur.refreshRate))")
                         .font(.caption)
@@ -185,7 +181,7 @@ struct MenuBarView: View {
                         }
                         .frame(maxWidth: .infinity)
                     }
-                    .controlSize(.large)
+                    .controlSize(.regular)
                     .buttonStyle(.bordered)
                 }
             } else if virtualDisplayManager.isActive {
@@ -201,7 +197,7 @@ struct MenuBarView: View {
                         }
                         .frame(maxWidth: .infinity)
                     }
-                    .controlSize(.large)
+                    .controlSize(.regular)
                     .buttonStyle(.bordered)
                 }
             } else {
@@ -239,7 +235,7 @@ struct MenuBarView: View {
                         }
                         .frame(maxWidth: .infinity)
                     }
-                    .controlSize(.large)
+                    .controlSize(.regular)
                     .buttonStyle(.borderedProminent)
 
                     Text("No system files are modified. Reverts when the app quits.")
