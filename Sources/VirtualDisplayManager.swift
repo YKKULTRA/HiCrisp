@@ -28,6 +28,9 @@ final class VirtualDisplayManager: ObservableObject {
         let usedFallbackProfile: Bool
     }
 
+    /// Vendor ID used for HiCrisp virtual displays, so the UI can filter them out.
+    static let virtualVendorID: UInt32 = 0xF0F0
+
     @Published private(set) var activeSession: HiDPISession?
     @Published private(set) var lastError: String?
 
@@ -136,7 +139,7 @@ final class VirtualDisplayManager: ObservableObject {
 
         let descriptor = CGVirtualDisplayDescriptor()
         descriptor.name = "\(physicalDisplay.name) HiDPI"
-        descriptor.vendorID = 0xF0F0
+        descriptor.vendorID = Self.virtualVendorID
         descriptor.productID = 0x1234
         descriptor.serialNum = 0x0001
         descriptor.maxPixelsWide = pixelWidth
@@ -241,30 +244,40 @@ final class VirtualDisplayManager: ObservableObject {
                 guard self.generation == currentGeneration else { return }
 
                 Self.assignColorProfile(profileAssignment, to: vDisplayID)
+                self.waitForHiDPIActivation(displayID: vDisplayID, generation: currentGeneration) { verified in
+                    guard self.generation == currentGeneration else { return }
 
-                let verified = DisplayManager.verifyHiDPIActive(displayID: vDisplayID)
-                NSLog("[VirtualDisplay] backingScaleFactor verification: %@", verified ? "2.0x confirmed" : "NOT 2.0x")
+                    NSLog("[VirtualDisplay] backingScaleFactor verification: %@", verified ? "2.0x confirmed" : "NOT 2.0x")
 
-                self.activeSession = HiDPISession(
-                    physicalDisplayID: physicalDisplay.id,
-                    physicalDisplayName: physicalDisplay.name,
-                    virtualDisplayID: vDisplayID,
-                    targetWidth: targetWidth,
-                    targetHeight: targetHeight,
-                    refreshRate: refreshRate,
-                    profileDescription: profileAssignment.description,
-                    usesEstimatedPhysicalSize: usesEstimatedPhysicalSize,
-                    usedFallbackProfile: profileAssignment.usedFallback
-                )
-                self.lastError = nil
+                    guard verified else {
+                        self.tearDown()
+                        self.fail(
+                            "HiDPI verification failed. macOS did not switch the session to true 2x backing scale.",
+                            completion: completion
+                        )
+                        return
+                    }
 
-                let suffix = verified ? "" : " (warning: backingScaleFactor != 2.0)"
-                let profileSuffix = profileAssignment.usedFallback ? " using fallback sRGB profile" : ""
-                self.complete(
-                    true,
-                    "HiDPI enabled on \(physicalDisplay.name) at \(targetWidth)x\(targetHeight) @ \(RefreshRateSupport.label(for: refreshRate))\(profileSuffix)\(suffix)",
-                    completion: completion
-                )
+                    self.activeSession = HiDPISession(
+                        physicalDisplayID: physicalDisplay.id,
+                        physicalDisplayName: physicalDisplay.name,
+                        virtualDisplayID: vDisplayID,
+                        targetWidth: targetWidth,
+                        targetHeight: targetHeight,
+                        refreshRate: refreshRate,
+                        profileDescription: profileAssignment.description,
+                        usesEstimatedPhysicalSize: usesEstimatedPhysicalSize,
+                        usedFallbackProfile: profileAssignment.usedFallback
+                    )
+                    self.lastError = nil
+
+                    let profileSuffix = profileAssignment.usedFallback ? " using fallback sRGB profile" : ""
+                    self.complete(
+                        true,
+                        "HiDPI enabled on \(physicalDisplay.name) at \(targetWidth)x\(targetHeight) @ \(RefreshRateSupport.label(for: refreshRate))\(profileSuffix)",
+                        completion: completion
+                    )
+                }
             }
         }
     }
@@ -304,6 +317,32 @@ final class VirtualDisplayManager: ObservableObject {
 
             DispatchQueue.main.async {
                 completion(!self.isDisplayOnline(displayID))
+            }
+        }
+    }
+
+    private func waitForHiDPIActivation(
+        displayID: CGDirectDisplayID,
+        generation: Int,
+        completion: @escaping (Bool) -> Void
+    ) {
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            guard let self else { return }
+
+            let deadline = Date().addingTimeInterval(2.5)
+            while self.generation == generation && Date() < deadline {
+                if DisplayManager.verifyHiDPIActive(displayID: displayID) {
+                    DispatchQueue.main.async {
+                        completion(true)
+                    }
+                    return
+                }
+
+                Thread.sleep(forTimeInterval: 0.2)
+            }
+
+            DispatchQueue.main.async {
+                completion(false)
             }
         }
     }

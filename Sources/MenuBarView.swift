@@ -10,7 +10,7 @@ struct MenuBarView: View {
     @State private var selectedHzByDisplay: [CGDirectDisplayID: Double] = [:]
 
     var body: some View {
-        let externals = displayManager.displays.filter { !$0.isBuiltIn }
+        let externals = displayManager.displays.filter { !$0.isBuiltIn && $0.vendorID != VirtualDisplayManager.virtualVendorID }
 
         VStack(spacing: 0) {
             HStack {
@@ -41,15 +41,16 @@ struct MenuBarView: View {
             Divider()
 
             if externals.isEmpty {
-                VStack(spacing: 8) {
+                VStack(spacing: 6) {
                     Image(systemName: "display.trianglebadge.exclamationmark")
-                        .font(.largeTitle)
+                        .font(.title2)
                         .foregroundColor(.secondary)
                     Text("No external displays found")
+                        .font(.callout)
                         .foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity)
-                .padding(24)
+                .padding(16)
             } else {
                 VStack(spacing: 12) {
                     ForEach(externals) { display in
@@ -100,15 +101,14 @@ struct MenuBarView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
         }
-        .frame(width: 340)
-        .frame(minHeight: 540)
+        .frame(width: 300)
     }
 
     // MARK: - Monitor Card
 
     @ViewBuilder
     private func monitorCard(_ display: DisplayInfo) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             // Header
             HStack {
                 Image(systemName: "display")
@@ -122,7 +122,7 @@ struct MenuBarView: View {
             // Current mode info
             HStack(spacing: 4) {
                 Text("\(display.nativeWidth)x\(display.nativeHeight)")
-                    .font(.system(size: 16, weight: .medium, design: .monospaced))
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
                 if let cur = display.currentMode {
                     Text("@ \(RefreshRateSupport.label(for: cur.refreshRate))")
                         .font(.caption)
@@ -181,7 +181,7 @@ struct MenuBarView: View {
                         }
                         .frame(maxWidth: .infinity)
                     }
-                    .controlSize(.large)
+                    .controlSize(.regular)
                     .buttonStyle(.bordered)
                 }
             } else if virtualDisplayManager.isActive {
@@ -197,7 +197,7 @@ struct MenuBarView: View {
                         }
                         .frame(maxWidth: .infinity)
                     }
-                    .controlSize(.large)
+                    .controlSize(.regular)
                     .buttonStyle(.bordered)
                 }
             } else {
@@ -235,7 +235,7 @@ struct MenuBarView: View {
                         }
                         .frame(maxWidth: .infinity)
                     }
-                    .controlSize(.large)
+                    .controlSize(.regular)
                     .buttonStyle(.borderedProminent)
 
                     Text("No system files are modified. Reverts when the app quits.")
