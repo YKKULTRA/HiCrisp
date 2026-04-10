@@ -272,17 +272,9 @@ final class VirtualDisplayManager: ObservableObject {
     }
 
     private static func bestProfileAssignment(for physicalDisplayID: CGDirectDisplayID) -> ProfileAssignment {
-        if let unmanagedProfile = ColorSyncProfileCreateWithDisplayID(physicalDisplayID) {
-            let profile = unmanagedProfile.takeRetainedValue()
-            let description = ColorSyncProfileCopyDescriptionString(profile)?.takeRetainedValue() as String?
-            if let unmanagedProfileURL = ColorSyncProfileGetURL(profile, nil) {
-                return ProfileAssignment(
-                    url: unmanagedProfileURL.takeRetainedValue(),
-                    description: description ?? "Matched physical display profile"
-                )
-            }
-        }
-
+        // Matching the physical display's profile directly looked attractive,
+        // but it crashes on some systems during profile handoff. Use a safe
+        // system sRGB profile until that path can be reintroduced reliably.
         let srgbProfilePath = "/System/Library/ColorSync/Profiles/sRGB Profile.icc"
         let profileURL = URL(fileURLWithPath: srgbProfilePath) as CFURL
         return ProfileAssignment(url: profileURL, description: "sRGB IEC61966-2.1")
