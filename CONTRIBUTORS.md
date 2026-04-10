@@ -1,4 +1,0 @@
-# Contributors
-
-- YKKULTRA
-- OpenAI Codex
