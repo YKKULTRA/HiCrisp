@@ -2,6 +2,7 @@
 .build/
 *.o
 *.d
+AdvancedMonitorSettings.app/
 HiCrisp.app/
 *.xcodeproj/
 xcuserdata/
