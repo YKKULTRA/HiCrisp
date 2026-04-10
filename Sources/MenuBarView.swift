@@ -51,15 +51,12 @@ struct MenuBarView: View {
                 .frame(maxWidth: .infinity)
                 .padding(24)
             } else {
-                ScrollView {
-                    VStack(spacing: 12) {
-                        ForEach(externals) { display in
-                            monitorCard(display)
-                        }
+                VStack(spacing: 12) {
+                    ForEach(externals) { display in
+                        monitorCard(display)
                     }
-                    .padding(12)
                 }
-                .frame(minHeight: 120, maxHeight: 320)
+                .padding(12)
             }
 
             if let builtIn = displayManager.displays.first(where: { $0.isBuiltIn }) {
@@ -104,6 +101,7 @@ struct MenuBarView: View {
                 .padding(.vertical, 8)
         }
         .frame(width: 340)
+        .frame(minHeight: 540)
     }
 
     // MARK: - Monitor Card
