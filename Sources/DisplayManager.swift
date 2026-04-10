@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import IOKit
 import AppKit
+import HiCrispSupport
 
 // MARK: - Display Mode
 
@@ -75,7 +76,7 @@ struct DisplayInfo: Identifiable {
     var availableRefreshRates: [Double] {
         let rates = modes.filter { !$0.isHiDPI && $0.width == nativeWidth && $0.height == nativeHeight }
             .map { $0.refreshRate }
-        return Array(Set(rates)).sorted(by: >)
+        return RefreshRateSupport.normalizedRates(rates)
     }
 }
 
@@ -84,10 +85,31 @@ struct DisplayInfo: Identifiable {
 final class DisplayManager: ObservableObject {
     @Published var displays: [DisplayInfo] = []
 
+    init() {
+        let error = CGDisplayRegisterReconfigurationCallback(
+            Self.handleDisplayReconfiguration,
+            Unmanaged.passUnretained(self).toOpaque()
+        )
+        if error != .success {
+            NSLog("[DisplayManager] Failed to register display callback: %d", error.rawValue)
+        }
+
+        refresh()
+    }
+
+    deinit {
+        CGDisplayRemoveReconfigurationCallback(
+            Self.handleDisplayReconfiguration,
+            Unmanaged.passUnretained(self).toOpaque()
+        )
+    }
+
     func refresh() {
-        var displayIDs = [CGDirectDisplayID](repeating: 0, count: 16)
         var displayCount: UInt32 = 0
-        CGGetOnlineDisplayList(16, &displayIDs, &displayCount)
+        CGGetOnlineDisplayList(0, nil, &displayCount)
+
+        var displayIDs = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+        CGGetOnlineDisplayList(displayCount, &displayIDs, &displayCount)
 
         displays = (0..<Int(displayCount)).map { i in
             makeDisplayInfo(for: displayIDs[i])
@@ -205,5 +227,14 @@ final class DisplayManager: ObservableObject {
         }
         IOObjectRelease(iterator)
         return name
+    }
+
+    private static let handleDisplayReconfiguration: CGDisplayReconfigurationCallBack = { _, _, userInfo in
+        guard let userInfo else { return }
+
+        let manager = Unmanaged<DisplayManager>.fromOpaque(userInfo).takeUnretainedValue()
+        DispatchQueue.main.async {
+            manager.refresh()
+        }
     }
 }

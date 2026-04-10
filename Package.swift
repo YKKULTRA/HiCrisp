@@ -10,14 +10,23 @@ let package = Package(
             path: "Sources/CGVirtualDisplayAPI",
             publicHeadersPath: "include"
         ),
+        .target(
+            name: "HiCrispSupport",
+            path: "Sources/HiCrispSupport"
+        ),
         .executableTarget(
             name: "HiCrisp",
-            dependencies: ["CGVirtualDisplayAPI"],
+            dependencies: ["CGVirtualDisplayAPI", "HiCrispSupport"],
             path: "Sources",
-            exclude: ["CGVirtualDisplayAPI"],
+            exclude: ["CGVirtualDisplayAPI", "HiCrispSupport"],
             linkerSettings: [
                 .unsafeFlags(["-F/System/Library/PrivateFrameworks"]),
             ]
+        ),
+        .testTarget(
+            name: "HiCrispSupportTests",
+            dependencies: ["HiCrispSupport"],
+            path: "Tests/HiCrispSupportTests"
         ),
     ]
 )
