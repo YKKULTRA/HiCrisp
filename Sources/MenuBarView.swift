@@ -4,6 +4,7 @@ import HiCrispSupport
 struct MenuBarView: View {
     @ObservedObject var displayManager: DisplayManager
     @ObservedObject var virtualDisplayManager: VirtualDisplayManager
+    @AppStorage("experimentalMatchPhysicalColorProfile") private var experimentalMatchPhysicalColorProfile = false
     @State private var statusMessage: String?
     @State private var statusIsError = false
     @State private var selectedHzByDisplay: [CGDirectDisplayID: Double] = [:]
@@ -19,6 +20,19 @@ struct MenuBarView: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Match monitor color profile", isOn: $experimentalMatchPhysicalColorProfile)
+                    .toggleStyle(.switch)
+
+                Text("Experimental. Off uses stable sRGB for the virtual display.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -147,6 +161,12 @@ struct MenuBarView: View {
                             .font(.caption2)
                             .foregroundColor(.secondary)
 
+                        if activeSession.usedFallbackProfile {
+                            Text("Requested physical profile matching was not available, so the session fell back to sRGB.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+
                         if activeSession.usesEstimatedPhysicalSize {
                             Text("Physical size was estimated because the display did not report EDID dimensions.")
                                 .font(.caption2)
@@ -268,7 +288,8 @@ struct MenuBarView: View {
             physicalDisplay: display,
             targetWidth: display.nativeWidth,
             targetHeight: display.nativeHeight,
-            refreshRate: refreshRate
+            refreshRate: refreshRate,
+            preferPhysicalColorProfile: experimentalMatchPhysicalColorProfile
         ) { success, message in
             statusMessage = message
             statusIsError = !success
