@@ -1,11 +1,12 @@
 import SwiftUI
+import HiCrispSupport
 
 struct MenuBarView: View {
     @ObservedObject var displayManager: DisplayManager
     @ObservedObject var virtualDisplayManager: VirtualDisplayManager
     @State private var statusMessage: String?
     @State private var statusIsError = false
-    @State private var selectedHz: Double = 0  // 0 = auto-detect from current mode
+    @State private var selectedHzByDisplay: [CGDirectDisplayID: Double] = [:]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -109,11 +110,11 @@ struct MenuBarView: View {
                 Text("\(display.nativeWidth)x\(display.nativeHeight)")
                     .font(.system(size: 16, weight: .medium, design: .monospaced))
                 if let cur = display.currentMode {
-                    Text("@ \(Int(cur.refreshRate))Hz")
+                    Text("@ \(RefreshRateSupport.label(for: cur.refreshRate))")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                if virtualDisplayManager.isActive {
+                if virtualDisplayManager.isActive(for: display.id) {
                     Text("HiDPI")
                         .font(.caption2).bold()
                         .padding(.horizontal, 5)
@@ -127,7 +128,7 @@ struct MenuBarView: View {
             Divider()
 
             // Action area
-            if virtualDisplayManager.isActive {
+            if virtualDisplayManager.isActive(for: display.id) {
                 // HiDPI is active
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
@@ -141,10 +142,38 @@ struct MenuBarView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
 
+                    if let activeSession = virtualDisplayManager.activeSession {
+                        Text("Color profile: \(activeSession.profileDescription)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+
+                        if activeSession.usesEstimatedPhysicalSize {
+                            Text("Physical size was estimated because the display did not report EDID dimensions.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
                     Button(action: { disableHiDPI(display) }) {
                         HStack {
                             Image(systemName: "xmark.circle")
                             Text("Disable HiDPI")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .buttonStyle(.bordered)
+                }
+            } else if virtualDisplayManager.isActive {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("HiDPI is already active on \(virtualDisplayManager.activeSession?.physicalDisplayName ?? "another display"). Disable that session before switching monitors.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Button(action: { virtualDisplayManager.disableHiDPI() }) {
+                        HStack {
+                            Image(systemName: "xmark.circle")
+                            Text("Disable Current Session")
                         }
                         .frame(maxWidth: .infinity)
                     }
@@ -164,23 +193,19 @@ struct MenuBarView: View {
                         HStack {
                             Text("Refresh rate:")
                                 .font(.caption)
-                            Picker("", selection: $selectedHz) {
+                            Picker("", selection: refreshRateBinding(for: display)) {
                                 ForEach(rates, id: \.self) { hz in
-                                    Text("\(Int(hz))Hz").tag(hz)
+                                    Text(RefreshRateSupport.label(for: hz)).tag(hz)
                                 }
                             }
                             .labelsHidden()
-                            .frame(width: 80)
+                            .frame(width: 94)
                         }
                     }
 
                     // Auto-select current refresh rate on appear
                     Color.clear.frame(height: 0).onAppear {
-                        if selectedHz == 0, let cur = display.currentMode {
-                            selectedHz = cur.refreshRate
-                        } else if selectedHz == 0, let first = rates.first {
-                            selectedHz = first
-                        }
+                        syncSelectedRefreshRate(for: display)
                     }
 
                     Button(action: { enableHiDPI(display) }) {
@@ -210,11 +235,16 @@ struct MenuBarView: View {
 
     @ViewBuilder
     private func statusBadge(_ display: DisplayInfo) -> some View {
+        let isActiveForDisplay = virtualDisplayManager.isActive(for: display.id)
+        let isBlockedByAnotherDisplay = virtualDisplayManager.isActive && !isActiveForDisplay
+        let badgeColor = isActiveForDisplay ? Color.green : (isBlockedByAnotherDisplay ? Color.orange : Color.secondary)
+        let label = isActiveForDisplay ? "HiDPI Active" : (isBlockedByAnotherDisplay ? "Session Elsewhere" : "Ready")
+
         HStack(spacing: 4) {
             Circle()
-                .fill(virtualDisplayManager.isActive ? Color.green : Color.orange)
+                .fill(badgeColor)
                 .frame(width: 8, height: 8)
-            Text(virtualDisplayManager.isActive ? "HiDPI Active" : "Standard")
+            Text(label)
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }
@@ -223,14 +253,22 @@ struct MenuBarView: View {
     // MARK: - Actions
 
     private func enableHiDPI(_ display: DisplayInfo) {
-        statusMessage = "Setting up HiDPI..."
+        syncSelectedRefreshRate(for: display)
+        let refreshRate = selectedHzByDisplay[display.id]
+            ?? RefreshRateSupport.preferredRate(
+                stored: nil,
+                current: display.currentMode?.refreshRate,
+                available: display.availableRefreshRates
+            )
+
+        statusMessage = "Setting up HiDPI on \(display.name)..."
         statusIsError = false
 
         virtualDisplayManager.enableHiDPI(
             physicalDisplay: display,
             targetWidth: display.nativeWidth,
             targetHeight: display.nativeHeight,
-            refreshRate: selectedHz
+            refreshRate: refreshRate
         ) { success, message in
             statusMessage = message
             statusIsError = !success
@@ -244,10 +282,38 @@ struct MenuBarView: View {
 
     private func disableHiDPI(_ display: DisplayInfo) {
         virtualDisplayManager.disableHiDPI()
-        statusMessage = "HiDPI disabled"
+        statusMessage = "HiDPI disabled on \(display.name)"
         statusIsError = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             displayManager.refresh()
+        }
+    }
+
+    private func refreshRateBinding(for display: DisplayInfo) -> Binding<Double> {
+        Binding(
+            get: {
+                selectedHzByDisplay[display.id]
+                    ?? RefreshRateSupport.preferredRate(
+                        stored: nil,
+                        current: display.currentMode?.refreshRate,
+                        available: display.availableRefreshRates
+                    )
+            },
+            set: { selectedHzByDisplay[display.id] = $0 }
+        )
+    }
+
+    private func syncSelectedRefreshRate(for display: DisplayInfo) {
+        let preferred = RefreshRateSupport.preferredRate(
+            stored: selectedHzByDisplay[display.id],
+            current: display.currentMode?.refreshRate,
+            available: display.availableRefreshRates
+        )
+
+        if preferred > 0 {
+            selectedHzByDisplay[display.id] = preferred
+        } else {
+            selectedHzByDisplay.removeValue(forKey: display.id)
         }
     }
 }

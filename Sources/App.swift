@@ -11,7 +11,6 @@ struct HiCrispApp: App {
                 displayManager: displayManager,
                 virtualDisplayManager: virtualDisplayManager
             )
-            .onAppear { displayManager.refresh() }
         }
         .menuBarExtraStyle(.window)
     }
