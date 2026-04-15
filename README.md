@@ -25,6 +25,19 @@ At a high level, HiCrisp:
 
 This approach is session-based. No display override files are written, and no permanent system configuration is modified.
 
+## Why HiCrisp?
+
+Most external monitors on macOS either:
+- look blurry at native scaling, or
+- waste space with built-in HiDPI modes.
+
+HiCrisp forces proper 2x rendering on displays that don’t officially support it without patching system files.
+For example, on a 2560×1440 monitor:
+
+- Virtual display: 5120×2880
+- Logical (HiDPI): 2560×1440 (2x scaling)
+- Result: sharper text and UI, similar layout size
+
 ## Requirements
 
 - macOS 13 or newer
@@ -38,6 +51,17 @@ This approach is session-based. No display override files are written, and no pe
 - Current implementation manages one virtual-display HiDPI session at a time.
 - If macOS rejects the virtual display or mirroring operation, HiDPI will not activate.
 - Color/profile handling is tuned for sRGB-like displays and may not be ideal for every panel.
+
+ ## Is This For You?
+
+Works best if you:
+- use a non-Retina external monitor (1080p/1440p/ultrawide)
+- care about text sharpness over raw performance
+- are comfortable running experimental macOS utilities
+
+Not ideal if you:
+- rely on color-critical workflows
+- need guaranteed stability across macOS updates
 
 ## Build
 
