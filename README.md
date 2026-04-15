@@ -52,7 +52,7 @@ For example, on a 2560×1440 monitor:
 - If macOS rejects the virtual display or mirroring operation, HiDPI will not activate.
 - Color/profile handling is tuned for sRGB-like displays and may not be ideal for every panel.
 
-- ## Performance Notes
+## Performance Notes
 
 HiDPI rendering increases GPU workload (effectively rendering 4× pixels).
 
