@@ -8,6 +8,7 @@ From the repository root:
 
 ```bash
 swift build
+swift test
 ```
 
 To produce a runnable app bundle:
@@ -23,6 +24,8 @@ To produce a runnable app bundle:
 - `Sources/DisplayManager.swift`: physical display discovery and display mode inspection
 - `Sources/VirtualDisplayManager.swift`: virtual display lifecycle, mirroring, and cleanup
 - `Sources/CGVirtualDisplayAPI/include/CGVirtualDisplay.h`: private API declarations used by Swift
+- `Sources/HiCrispSupport/DisplaySupport.swift`: refresh-rate, display identity, and physical size helpers
+- `Tests/HiCrispSupportTests/`: unit tests for `HiCrispSupport`
 
 ## Development Guidelines
 
@@ -31,10 +34,12 @@ To produce a runnable app bundle:
 - Prefer explicit failure messages over silent fallbacks.
 - Assume private APIs can behave differently across macOS versions.
 - Test with a real external display whenever you touch mirroring or mode-selection logic.
+- Put logic that does not need a display into `HiCrispSupport` so it can be unit tested.
 
 ## Before Opening a PR
 
 - Build the package with `swift build`.
+- Run the unit tests with `swift test`.
 - Build the app bundle with `./build.sh`.
 - If you changed display logic, test both enable and disable flows on hardware.
 - Document any macOS-version-specific behavior in the PR description.

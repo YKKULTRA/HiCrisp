@@ -10,7 +10,7 @@ It does this without patching system files. Instead, it creates a virtual displa
 - Detects connected displays and focuses on external monitors.
 - Offers one-click HiDPI enable/disable for the selected external display.
 - Preserves the monitor's physical size data so UI scale and font rendering stay sensible.
-- Lets you choose the refresh rate exposed to the virtual display.
+- Lets you choose the refresh rate exposed to the virtual display, and remembers it per monitor model.
 - Reverts cleanly when disabled or when the app exits.
 
 ## How It Works
@@ -23,7 +23,7 @@ At a high level, HiCrisp:
 4. Configures the physical monitor to mirror the virtual display.
 5. Lets macOS render UI and text at 2x scale, which produces sharper output on many non-Retina panels.
 
-This approach is session-based. No display override files are written, and no permanent system configuration is modified.
+This approach is session-based. No display override files are written and no system files are touched. The one thing that outlives a session is the color profile assigned to the virtual display, which macOS keeps in your per-user ColorSync preferences.
 
 ## Why HiCrisp?
 
@@ -52,7 +52,7 @@ For example, on a 2560×1440 monitor:
 - If macOS rejects the virtual display or mirroring operation, HiDPI will not activate.
 - Color/profile handling is tuned for sRGB-like displays and may not be ideal for every panel.
 
-- ## Performance Notes
+## Performance Notes
 
 HiDPI rendering increases GPU workload (effectively rendering 4× pixels).
 
@@ -60,8 +60,7 @@ On modern Macs this is usually fine for general use, however:
 - animations may be slightly less smooth on lower-end GPUs
 - high refresh rate displays (120Hz+) may be harder to sustain
 
-
- ## Is This For You?
+## Is This For You?
 
 Works best if you:
 - use a non-Retina external monitor (1080p/1440p/ultrawide)
@@ -93,6 +92,12 @@ You can also build the executable directly:
 swift build -c release
 ```
 
+Run the unit tests for the platform-independent helpers in `HiCrispSupport`:
+
+```bash
+swift test
+```
+
 ## Run
 
 After building:
@@ -116,6 +121,9 @@ Sources/
   DisplayManager.swift        Physical display discovery and mode inspection
   VirtualDisplayManager.swift Virtual display creation and mirroring logic
   CGVirtualDisplayAPI/        Private API headers bridged into SwiftPM
+  HiCrispSupport/             Refresh-rate, display identity, and size helpers
+Tests/
+  HiCrispSupportTests/        Unit tests for HiCrispSupport
 Package.swift                 Swift package definition
 build.sh                      Release build + app bundle packaging
 ```

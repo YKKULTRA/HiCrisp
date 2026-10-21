@@ -5,9 +5,21 @@ struct MenuBarView: View {
     @ObservedObject var displayManager: DisplayManager
     @ObservedObject var virtualDisplayManager: VirtualDisplayManager
     @AppStorage("experimentalMatchPhysicalColorProfile") private var experimentalMatchPhysicalColorProfile = false
-    @State private var statusMessage: String?
-    @State private var statusIsError = false
-    @State private var selectedHzByDisplay: [CGDirectDisplayID: Double] = [:]
+    @State private var status: Status?
+    @State private var selectedHzByDisplay: [String: Double] = [:]
+
+    private enum Status: Equatable {
+        case working(String)
+        case succeeded(String)
+        case failed(String)
+
+        var message: String {
+            switch self {
+            case .working(let message), .succeeded(let message), .failed(let message):
+                return message
+            }
+        }
+    }
 
     var body: some View {
         let externals = displayManager.displays.filter { !$0.isBuiltIn && $0.vendorID != VirtualDisplayManager.virtualVendorID }
@@ -21,6 +33,8 @@ struct MenuBarView: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
+                .keyboardShortcut("r")
+                .help("Rescan displays")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -75,16 +89,25 @@ struct MenuBarView: View {
                 .padding(.vertical, 6)
             }
 
-            if let msg = statusMessage {
+            if let status {
                 Divider()
                 HStack(spacing: 6) {
-                    Image(systemName: statusIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                        .foregroundColor(statusIsError ? .orange : .green)
-                    Text(msg)
+                    switch status {
+                    case .working:
+                        ProgressView()
+                            .controlSize(.small)
+                    case .succeeded:
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                    case .failed:
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                    }
+                    Text(status.message)
                         .font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 8)
-                    Button(action: { statusMessage = nil }) {
+                    Button(action: { self.status = nil }) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.secondary)
                     }
@@ -93,6 +116,14 @@ struct MenuBarView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
+                .task(id: status) {
+                    // Successes clear themselves; errors and in-progress messages stay until replaced or dismissed.
+                    guard case .succeeded = status else { return }
+                    try? await Task.sleep(for: .seconds(5))
+                    if !Task.isCancelled {
+                        self.status = nil
+                    }
+                }
             }
 
             Divider()
@@ -102,6 +133,12 @@ struct MenuBarView: View {
                 .padding(.vertical, 8)
         }
         .frame(width: 300)
+        .onChange(of: virtualDisplayManager.lastError) { error in
+            // Also catches failures nobody triggered, like macOS terminating the virtual display.
+            if let error {
+                status = .failed(error)
+            }
+        }
     }
 
     // MARK: - Monitor Card
@@ -115,6 +152,8 @@ struct MenuBarView: View {
                     .foregroundColor(.accentColor)
                 Text(display.name)
                     .font(.system(.body, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Spacer()
                 statusBadge(display)
             }
@@ -223,11 +262,6 @@ struct MenuBarView: View {
                         }
                     }
 
-                    // Auto-select current refresh rate on appear
-                    Color.clear.frame(height: 0).onAppear {
-                        syncSelectedRefreshRate(for: display)
-                    }
-
                     Button(action: { enableHiDPI(display) }) {
                         HStack {
                             Image(systemName: "sparkles")
@@ -273,26 +307,16 @@ struct MenuBarView: View {
     // MARK: - Actions
 
     private func enableHiDPI(_ display: DisplayInfo) {
-        syncSelectedRefreshRate(for: display)
-        let refreshRate = selectedHzByDisplay[display.id]
-            ?? RefreshRateSupport.preferredRate(
-                stored: nil,
-                current: display.currentMode?.refreshRate,
-                available: display.availableRefreshRates
-            )
-
-        statusMessage = "Setting up HiDPI on \(display.name)..."
-        statusIsError = false
+        status = .working("Setting up HiDPI on \(display.name)...")
 
         virtualDisplayManager.enableHiDPI(
             physicalDisplay: display,
             targetWidth: display.nativeWidth,
             targetHeight: display.nativeHeight,
-            refreshRate: refreshRate,
+            refreshRate: selectedRefreshRate(for: display),
             preferPhysicalColorProfile: experimentalMatchPhysicalColorProfile
         ) { success, message in
-            statusMessage = message
-            statusIsError = !success
+            status = success ? .succeeded(message) : .failed(message)
             if success {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                     displayManager.refresh()
@@ -303,38 +327,35 @@ struct MenuBarView: View {
 
     private func disableHiDPI(_ display: DisplayInfo) {
         virtualDisplayManager.disableHiDPI()
-        statusMessage = "HiDPI disabled on \(display.name)"
-        statusIsError = false
+        status = .succeeded("HiDPI disabled on \(display.name)")
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             displayManager.refresh()
         }
     }
 
-    private func refreshRateBinding(for display: DisplayInfo) -> Binding<Double> {
-        Binding(
-            get: {
-                selectedHzByDisplay[display.id]
-                    ?? RefreshRateSupport.preferredRate(
-                        stored: nil,
-                        current: display.currentMode?.refreshRate,
-                        available: display.availableRefreshRates
-                    )
-            },
-            set: { selectedHzByDisplay[display.id] = $0 }
-        )
-    }
+    // MARK: - Refresh Rate Selection
 
-    private func syncSelectedRefreshRate(for display: DisplayInfo) {
-        let preferred = RefreshRateSupport.preferredRate(
-            stored: selectedHzByDisplay[display.id],
+    /// The picked rate for this monitor model, else the current rate, snapped to what the display offers.
+    private func selectedRefreshRate(for display: DisplayInfo) -> Double {
+        RefreshRateSupport.preferredRate(
+            stored: selectedHzByDisplay[display.storageKey]
+                ?? UserDefaults.standard.double(forKey: refreshRateDefaultsKey(for: display)),
             current: display.currentMode?.refreshRate,
             available: display.availableRefreshRates
         )
+    }
 
-        if preferred > 0 {
-            selectedHzByDisplay[display.id] = preferred
-        } else {
-            selectedHzByDisplay.removeValue(forKey: display.id)
-        }
+    private func refreshRateBinding(for display: DisplayInfo) -> Binding<Double> {
+        Binding(
+            get: { selectedRefreshRate(for: display) },
+            set: { hz in
+                selectedHzByDisplay[display.storageKey] = hz
+                UserDefaults.standard.set(hz, forKey: refreshRateDefaultsKey(for: display))
+            }
+        )
+    }
+
+    private func refreshRateDefaultsKey(for display: DisplayInfo) -> String {
+        "refreshRate.\(display.storageKey)"
     }
 }

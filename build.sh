@@ -1,12 +1,22 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 APP_NAME="HiCrisp"
 BUILD_DIR=".build/release"
 APP_BUNDLE="$APP_NAME.app"
 
+if [[ "$(uname -s)" != "Darwin" ]]; then
+    echo "error: $APP_NAME only builds on macOS." >&2
+    exit 1
+fi
+
+if ! command -v swift >/dev/null 2>&1; then
+    echo "error: swift not found. Install Xcode or run: xcode-select --install" >&2
+    exit 1
+fi
+
 echo "Building $APP_NAME..."
-swift build -c release 2>&1
+swift build -c release
 
 echo "Creating app bundle..."
 rm -rf "$APP_BUNDLE"
