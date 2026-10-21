@@ -10,6 +10,8 @@ import HiCrispSupport
 /// Creates a virtual display at 2x resolution with HiDPI=1, mirrors the physical
 /// display onto it. macOS renders at 2x and downscales to the panel (exact 2:1 box filter).
 /// No system files modified. Reverts when the app quits.
+///
+/// All state, including the `generation` cancellation token, is only touched on the main queue.
 final class VirtualDisplayManager: ObservableObject {
     enum ProfileStrategy: Equatable {
         case srgb
@@ -20,9 +22,6 @@ final class VirtualDisplayManager: ObservableObject {
         let physicalDisplayID: CGDirectDisplayID
         let physicalDisplayName: String
         let virtualDisplayID: CGDirectDisplayID
-        let targetWidth: Int
-        let targetHeight: Int
-        let refreshRate: Double
         let profileDescription: String
         let usesEstimatedPhysicalSize: Bool
         let usedFallbackProfile: Bool
@@ -37,6 +36,7 @@ final class VirtualDisplayManager: ObservableObject {
     private var virtualDisplay: CGVirtualDisplay?
     private var physicalDisplayID: CGDirectDisplayID = 0
     private var generation: Int = 0  // cancellation token for async work
+    private var terminationObserver: NSObjectProtocol?
 
     var isActive: Bool {
         activeSession != nil
@@ -44,6 +44,17 @@ final class VirtualDisplayManager: ObservableObject {
 
     func isActive(for displayID: CGDirectDisplayID) -> Bool {
         activeSession?.physicalDisplayID == displayID
+    }
+
+    init() {
+        // Revert explicitly on quit instead of relying on process exit to drop the mirror.
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.disableHiDPI()
+        }
     }
 
     // MARK: - Enable HiDPI
@@ -56,17 +67,20 @@ final class VirtualDisplayManager: ObservableObject {
         preferPhysicalColorProfile: Bool,
         completion: @escaping (Bool, String) -> Void
     ) {
-        let previousVirtualDisplayID = activeSession?.virtualDisplayID
+        // Covers both an active session and an attempt that is still setting up.
+        let previousVirtualDisplayID = virtualDisplay?.displayID
 
-        // Tear down any existing session before starting a new one.
+        // Invalidate in-flight work, then tear down any existing session before starting a new one.
+        generation += 1
+        let currentGeneration = generation
         tearDown()
         lastError = nil
 
-        generation += 1
-        let currentGeneration = generation
-
-        waitForDisplayToTerminate(previousVirtualDisplayID, generation: currentGeneration) { [weak self] terminated in
-            guard let self, self.generation == currentGeneration else { return }
+        // macOS keeps a released virtual display registered briefly, and recreating it before then fails.
+        poll(timeout: 4.0, generation: currentGeneration, until: {
+            previousVirtualDisplayID.map { !Self.isDisplayOnline($0) } ?? true
+        }) { [weak self] terminated in
+            guard let self else { return }
 
             guard terminated else {
                 self.fail(
@@ -114,6 +128,9 @@ final class VirtualDisplayManager: ObservableObject {
 
     deinit {
         tearDown()
+        if let terminationObserver {
+            NotificationCenter.default.removeObserver(terminationObserver)
+        }
     }
 
     // MARK: - Helpers
@@ -127,8 +144,6 @@ final class VirtualDisplayManager: ObservableObject {
         currentGeneration: Int,
         completion: @escaping (Bool, String) -> Void
     ) {
-        physicalDisplayID = physicalDisplay.id
-
         let pixelWidth = UInt32(targetWidth * 2)
         let pixelHeight = UInt32(targetHeight * 2)
         let profileStrategy: ProfileStrategy = preferPhysicalColorProfile ? .matchPhysicalDisplay : .srgb
@@ -140,8 +155,10 @@ final class VirtualDisplayManager: ObservableObject {
         let descriptor = CGVirtualDisplayDescriptor()
         descriptor.name = "\(physicalDisplay.name) HiDPI"
         descriptor.vendorID = Self.virtualVendorID
-        descriptor.productID = 0x1234
-        descriptor.serialNum = 0x0001
+        // Mirror the monitor's own model and serial so each monitor gets a distinct, stable virtual
+        // display identity, and macOS keeps separate per-display settings for each.
+        descriptor.productID = physicalDisplay.productID
+        descriptor.serialNum = CGDisplaySerialNumber(physicalDisplay.id)
         descriptor.maxPixelsWide = pixelWidth
         descriptor.maxPixelsHigh = pixelHeight
 
@@ -173,7 +190,7 @@ final class VirtualDisplayManager: ObservableObject {
 
         let vDisplayID = vDisplay.displayID
         guard vDisplayID != 0 else {
-            fail("Virtual display created with invalid ID", completion: completion)
+            failAndTearDown("Virtual display created with invalid ID", completion: completion)
             return
         }
 
@@ -188,163 +205,130 @@ final class VirtualDisplayManager: ObservableObject {
         ]
 
         guard vDisplay.apply(settings) else {
-            fail("Failed to apply HiDPI settings", completion: completion)
+            failAndTearDown("Failed to apply HiDPI settings", completion: completion)
             return
         }
 
         virtualDisplay = vDisplay
 
-        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 1.2) { [weak self] in
-            guard let self = self, self.generation == currentGeneration else { return }
+        let session = HiDPISession(
+            physicalDisplayID: physicalDisplay.id,
+            physicalDisplayName: physicalDisplay.name,
+            virtualDisplayID: vDisplayID,
+            profileDescription: profileAssignment.description,
+            usesEstimatedPhysicalSize: usesEstimatedPhysicalSize,
+            usedFallbackProfile: profileAssignment.usedFallback
+        )
+        let profileSuffix = profileAssignment.usedFallback ? " using fallback sRGB profile" : ""
+        let successMessage = "HiDPI enabled on \(physicalDisplay.name) at \(targetWidth)x\(targetHeight) @ \(RefreshRateSupport.label(for: refreshRate))\(profileSuffix)"
 
-            if !self.isDisplayOnline(vDisplayID) {
-                Thread.sleep(forTimeInterval: 1.0)
-                guard self.generation == currentGeneration else { return }
-                if !self.isDisplayOnline(vDisplayID) {
-                    DispatchQueue.main.async {
-                        self.tearDown()
-                        self.fail("Virtual display not recognized by system", completion: completion)
-                    }
+        // Give macOS time to register the new display, then allow it one more second to appear.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            guard let self else { return }
+
+            self.poll(timeout: 1.0, generation: currentGeneration, until: {
+                Self.isDisplayOnline(vDisplayID)
+            }) { online in
+                guard online else {
+                    self.failAndTearDown("Virtual display not recognized by system", completion: completion)
                     return
                 }
-            }
 
-            var config: CGDisplayConfigRef?
-            var err = CGBeginDisplayConfiguration(&config)
-            guard err == .success, let cfg = config else {
-                DispatchQueue.main.async {
-                    self.tearDown()
-                    self.fail("Failed to begin display configuration", completion: completion)
-                }
-                return
-            }
-
-            err = CGConfigureDisplayMirrorOfDisplay(cfg, physicalDisplay.id, vDisplayID)
-            guard err == .success else {
-                CGCancelDisplayConfiguration(cfg)
-                DispatchQueue.main.async {
-                    self.tearDown()
-                    self.fail("Failed to configure mirroring (error \(err.rawValue))", completion: completion)
-                }
-                return
-            }
-
-            err = CGCompleteDisplayConfiguration(cfg, .forSession)
-            guard err == .success else {
-                DispatchQueue.main.async {
-                    self.tearDown()
-                    self.fail("Failed to complete display configuration (error \(err.rawValue))", completion: completion)
-                }
-                return
-            }
-
-            NSLog("[VirtualDisplay] Mirroring active: physical %u mirrors virtual %u", physicalDisplay.id, vDisplayID)
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                guard self.generation == currentGeneration else { return }
-
-                Self.assignColorProfile(profileAssignment, to: vDisplayID)
-                self.waitForHiDPIActivation(displayID: vDisplayID, generation: currentGeneration) { verified in
-                    guard self.generation == currentGeneration else { return }
-
-                    NSLog("[VirtualDisplay] backingScaleFactor verification: %@", verified ? "2.0x confirmed" : "NOT 2.0x")
-
-                    guard verified else {
-                        self.tearDown()
-                        self.fail(
-                            "HiDPI verification failed. macOS did not switch the session to true 2x backing scale.",
-                            completion: completion
-                        )
-                        return
-                    }
-
-                    self.activeSession = HiDPISession(
-                        physicalDisplayID: physicalDisplay.id,
-                        physicalDisplayName: physicalDisplay.name,
-                        virtualDisplayID: vDisplayID,
-                        targetWidth: targetWidth,
-                        targetHeight: targetHeight,
-                        refreshRate: refreshRate,
-                        profileDescription: profileAssignment.description,
-                        usesEstimatedPhysicalSize: usesEstimatedPhysicalSize,
-                        usedFallbackProfile: profileAssignment.usedFallback
-                    )
-                    self.lastError = nil
-
-                    let profileSuffix = profileAssignment.usedFallback ? " using fallback sRGB profile" : ""
-                    self.complete(
-                        true,
-                        "HiDPI enabled on \(physicalDisplay.name) at \(targetWidth)x\(targetHeight) @ \(RefreshRateSupport.label(for: refreshRate))\(profileSuffix)",
-                        completion: completion
-                    )
-                }
+                self.mirror(
+                    session,
+                    profile: profileAssignment,
+                    successMessage: successMessage,
+                    currentGeneration: currentGeneration,
+                    completion: completion
+                )
             }
         }
     }
 
-    private func isDisplayOnline(_ displayID: CGDirectDisplayID) -> Bool {
-        var count: UInt32 = 0
-        CGGetOnlineDisplayList(0, nil, &count)
-        var onlineDisplays = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        CGGetOnlineDisplayList(count, &onlineDisplays, &count)
-        return (0..<Int(count)).contains { onlineDisplays[$0] == displayID }
-    }
-
-    private func waitForDisplayToTerminate(
-        _ displayID: CGDirectDisplayID?,
-        generation: Int,
-        completion: @escaping (Bool) -> Void
+    private func mirror(
+        _ session: HiDPISession,
+        profile: ProfileAssignment,
+        successMessage: String,
+        currentGeneration: Int,
+        completion: @escaping (Bool, String) -> Void
     ) {
-        guard let displayID, displayID != 0 else {
-            completion(true)
+        physicalDisplayID = session.physicalDisplayID
+
+        var config: CGDisplayConfigRef?
+        var err = CGBeginDisplayConfiguration(&config)
+        guard err == .success, let cfg = config else {
+            failAndTearDown("Failed to begin display configuration", completion: completion)
             return
         }
 
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-            guard let self else { return }
+        err = CGConfigureDisplayMirrorOfDisplay(cfg, session.physicalDisplayID, session.virtualDisplayID)
+        guard err == .success else {
+            CGCancelDisplayConfiguration(cfg)
+            failAndTearDown("Failed to configure mirroring (error \(err.rawValue))", completion: completion)
+            return
+        }
 
-            let deadline = Date().addingTimeInterval(4.0)
-            while self.generation == generation && Date() < deadline {
-                if !self.isDisplayOnline(displayID) {
-                    DispatchQueue.main.async {
-                        completion(true)
-                    }
+        err = CGCompleteDisplayConfiguration(cfg, .forSession)
+        guard err == .success else {
+            failAndTearDown("Failed to complete display configuration (error \(err.rawValue))", completion: completion)
+            return
+        }
+
+        NSLog("[VirtualDisplay] Mirroring active: physical %u mirrors virtual %u",
+              session.physicalDisplayID, session.virtualDisplayID)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, self.generation == currentGeneration else { return }
+
+            Self.assignColorProfile(profile, to: session.virtualDisplayID)
+            self.poll(timeout: 2.5, generation: currentGeneration, until: {
+                DisplayManager.backingScale(for: session.virtualDisplayID) == 2.0
+            }) { verified in
+                let scale = DisplayManager.backingScale(for: session.virtualDisplayID)
+                NSLog("[VirtualDisplay] backingScaleFactor verification: %@ (%.2f)",
+                      verified ? "2.0x confirmed" : "NOT 2.0x", Double(scale ?? 0))
+
+                guard verified else {
+                    let detail = scale.map { String(format: "macOS reported a %.2fx backing scale instead of 2x.", Double($0)) }
+                        ?? "macOS did not expose the virtual display as a screen."
+                    self.failAndTearDown("HiDPI verification failed. \(detail)", completion: completion)
                     return
                 }
 
-                Thread.sleep(forTimeInterval: 0.2)
-            }
-
-            DispatchQueue.main.async {
-                completion(!self.isDisplayOnline(displayID))
+                self.activeSession = session
+                self.lastError = nil
+                completion(true, successMessage)
             }
         }
     }
 
-    private func waitForHiDPIActivation(
-        displayID: CGDirectDisplayID,
+    private static func isDisplayOnline(_ displayID: CGDirectDisplayID) -> Bool {
+        DisplayManager.onlineDisplayIDs().contains(displayID)
+    }
+
+    /// Checks `condition` on the main queue every 0.2s until it holds or `timeout` passes.
+    /// Stops without calling `completion` once `generation` is superseded.
+    private func poll(
+        timeout: TimeInterval,
         generation: Int,
+        until condition: @escaping () -> Bool,
         completion: @escaping (Bool) -> Void
     ) {
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-            guard let self else { return }
+        let deadline = Date().addingTimeInterval(timeout)
 
-            let deadline = Date().addingTimeInterval(2.5)
-            while self.generation == generation && Date() < deadline {
-                if DisplayManager.verifyHiDPIActive(displayID: displayID) {
-                    DispatchQueue.main.async {
-                        completion(true)
-                    }
-                    return
-                }
+        func check() {
+            guard self.generation == generation else { return }
 
-                Thread.sleep(forTimeInterval: 0.2)
-            }
-
-            DispatchQueue.main.async {
+            if condition() {
+                completion(true)
+            } else if Date() >= deadline {
                 completion(false)
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: check)
             }
         }
+
+        check()
     }
 
     private struct ProfileAssignment {
@@ -353,19 +337,16 @@ final class VirtualDisplayManager: ObservableObject {
         let usedFallback: Bool
     }
 
-    private func fail(_ message: String, completion: @escaping (Bool, String) -> Void) {
+    private func fail(_ message: String, completion: (Bool, String) -> Void) {
         lastError = message
-        complete(false, message, completion: completion)
+        completion(false, message)
     }
 
-    private func complete(
-        _ success: Bool,
-        _ message: String,
-        completion: @escaping (Bool, String) -> Void
-    ) {
-        DispatchQueue.main.async {
-            completion(success, message)
-        }
+    /// Ends the current attempt: ignores its pending callbacks and releases what it created.
+    private func failAndTearDown(_ message: String, completion: (Bool, String) -> Void) {
+        generation += 1
+        tearDown()
+        fail(message, completion: completion)
     }
 
     private static func bestProfileAssignment(

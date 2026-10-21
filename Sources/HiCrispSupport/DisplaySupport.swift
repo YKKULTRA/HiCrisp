@@ -51,6 +51,13 @@ public enum RefreshRateSupport {
     }
 }
 
+public enum DisplayIdentity {
+    /// Identifies a monitor model across reconnects and reboots, unlike CGDirectDisplayID.
+    public static func storageKey(vendorID: UInt32, productID: UInt32) -> String {
+        String(format: "%04x-%04x", vendorID, productID)
+    }
+}
+
 public enum PhysicalSizeEstimator {
     public static func fallbackSizeMM(nativeWidth: Int, nativeHeight: Int) -> CGSize {
         guard nativeWidth > 0, nativeHeight > 0 else {
